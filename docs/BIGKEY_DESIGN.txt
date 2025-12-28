@@ -1,0 +1,206 @@
+BIG KEY PUBLIC-KEY ENCRYPTION SYSTEM
+=====================================
+
+Design based on Identity-Based Encryption (IBE)
+Key property: Short public keys, very long private keys
+
+
+OVERVIEW
+--------
+
+Public Key:  Master public key (MPK) from IBE - very small (~1-2 group elements)
+Private Key: Collection of extracted IBE private keys for pre-agreed identities - very large
+
+
+SETUP PHASE
+-----------
+
+1. Master Key Generation (Alice)
+   - Alice runs IBE.Setup() → generates (MPK, MSK)
+   - MPK becomes Alice's public key (published/distributed to everyone)
+   - MSK is kept temporarily for key extraction only
+
+2. Identity Pre-Agreement (Alice & Bob)
+   - They agree on a large set of identities, e.g.:
+     * "alice-001", "alice-002", ..., "alice-100000"
+     * Could be: sequential, random strings, UUIDs, etc.
+     * Each identity represents one decryption capability
+   - Both parties store this list of valid identities
+
+3. Big Private Key Generation (Alice)
+   - For each agreed identity ID_i, Alice runs:
+     SK_i = IBE.Extract(MSK, ID_i)
+   - The "big private key" is the collection:
+     BigSK = {SK_001, SK_002, ..., SK_100000}
+   - CRITICAL: Alice then securely wipes MSK from memory/storage
+   - MSK is never stored long-term, only used during setup
+
+
+ENCRYPTION (Bob → Alice)
+-------------------------
+
+To send message M to Alice:
+
+1. Bob picks an identity at RANDOM from the pre-agreed list
+   - E.g., randomly select "alice-047851"
+
+2. Bob encrypts using IBE:
+   C = IBE.Encrypt(MPK, "alice-047851", M)
+
+3. Bob sends to Alice:
+   (C, "alice-047851")
+
+   The identity must be included so Alice knows which key component to use
+
+
+DECRYPTION (Alice)
+------------------
+
+When Alice receives (C, ID):
+
+1. Alice looks up the corresponding private key component from her big key
+   - E.g., if ID = "alice-047851", retrieve SK_047851
+
+2. Alice decrypts using IBE:
+   M = IBE.Decrypt(SK_047851, C)
+
+3. (Optional) Alice can delete SK_047851 after use for forward secrecy
+
+
+KEY PROPERTIES
+--------------
+
+Why Random Selection?
+- No need to coordinate/track which identity to use next
+- No sequential counter to synchronize
+- Natural load balancing across the identity space
+- Collision probability is low with large identity space
+
+Security Benefits:
+- Forward secrecy: Alice can delete used key components after decryption
+  → Past messages become undecryptable even if current state is compromised
+
+- Bounded capacity: System has fixed "lifetime" (number of identities)
+  → Forces periodic re-keying, which is good security hygiene
+
+- Small public key: Just MPK, regardless of how many identities pre-extracted
+  → Efficient distribution and storage
+
+- Post-compromise security: Since MSK is destroyed after setup, compromising
+  Alice's current state doesn't allow decrypting future messages to unused IDs
+
+- No backward key extraction: Without MSK, nobody (not even Alice) can extract
+  new identity keys after setup
+
+Trade-offs:
+- Private key size scales linearly with number of pre-agreed identities
+  → 100,000 identities × ~100 bytes/key = ~10MB private key
+
+- Identity collision possible (though unlikely with random selection and large space)
+  → Bob might pick an already-used identity (Alice may have deleted its key)
+  → Solution: Large identity space makes this probability negligible
+
+- Once all identities are used up, need new setup with fresh MPK/MSK
+
+- Alice must store entire big key until messages are received/decrypted
+
+
+PRACTICAL CONSIDERATIONS
+-------------------------
+
+Identity Space Size:
+- Too small: Risk of collisions/exhaustion
+- Too large: Bigger private key for Alice
+- Recommended: 10^6 to 10^9 identities depending on expected message volume
+
+Identity Format Options:
+- Sequential integers: "alice-000001" to "alice-999999"
+- UUIDs: "alice-550e8400-e29b-41d4-a716-446655440000"
+- Random strings: "alice-x7g3k9p2m5"
+
+Collision Handling:
+- With random selection from N identities and M messages sent:
+  Birthday paradox: ~50% collision probability when M ≈ √N
+  → For N=1,000,000: expect collision around 1,000 messages
+
+- Solutions:
+  a) Use very large identity space (e.g., 10^9 or 10^12)
+  b) Bob can try another random identity if decryption fails
+  c) Alice can signal which identities are still available (but loses forward secrecy)
+
+Forward Secrecy Implementation:
+- Alice deletes SK_i immediately after successfully decrypting message
+- Even if Alice's current state is compromised, past messages are safe
+- Deleted keys cannot be recovered (MSK is gone)
+
+Key Refresh:
+- When identity space is exhausted or periodic refresh desired:
+  * Alice generates new (MPK', MSK')
+  * Alice and Bob agree on new identity list
+  * Alice extracts new big private key, wipes MSK'
+  * Old MPK can be deprecated
+
+
+EXAMPLE WORKFLOW
+----------------
+
+Setup:
+- Alice generates IBE keys: MPK, MSK
+- Alice publishes MPK = "0x3a7f9b2e..."
+- Alice and Bob agree on IDs: ["alice-001", "alice-002", ..., "alice-100000"]
+- Alice extracts all 100,000 private keys into BigSK
+- Alice wipes MSK
+
+Message 1 (Bob → Alice):
+- Bob randomly picks "alice-73521"
+- Bob: C1 = IBE.Encrypt(MPK, "alice-73521", "Hello Alice")
+- Bob sends: (C1, "alice-73521")
+- Alice: M1 = IBE.Decrypt(BigSK["alice-73521"], C1) = "Hello Alice"
+- Alice deletes BigSK["alice-73521"]
+
+Message 2 (Bob → Alice):
+- Bob randomly picks "alice-02847"
+- Bob: C2 = IBE.Encrypt(MPK, "alice-02847", "Second message")
+- Bob sends: (C2, "alice-02847")
+- Alice: M2 = IBE.Decrypt(BigSK["alice-02847"], C2) = "Second message"
+- Alice deletes BigSK["alice-02847"]
+
+
+VARIATIONS AND EXTENSIONS
+--------------------------
+
+Hierarchical IBE:
+- Use HIBE for structured identities: "alice/2024/12/23/001"
+- Allows partial key delegation without full MSK
+
+Multiple Senders:
+- Each sender gets their own identity namespace
+- Bob uses: "alice-from-bob-001", "alice-from-bob-002", ...
+- Charlie uses: "alice-from-charlie-001", ...
+
+Bidirectional:
+- Both Alice and Bob run setup
+- Each gets their own (MPK, BigSK) pair
+- Can communicate both directions
+
+Group Messaging:
+- Alice publishes MPK_alice
+- Bob publishes MPK_bob
+- Charlie publishes MPK_charlie
+- Each extracts big keys for group-agreed identities
+- Sender encrypts once to each recipient's MPK
+
+
+CONCLUSION
+----------
+
+This construction converts IBE's "encrypt to any identity" flexibility into a
+"many one-time decryption keys" system by:
+1. Pre-committing to a large set of identities
+2. Pre-extracting all their private keys
+3. Destroying the master secret key
+
+The result is a public-key system with asymmetric key sizes: small public key
+(just the IBE master public key) and large private key (collection of extracted
+identity keys). Random identity selection by the sender eliminates coordination
+overhead while maintaining security properties.
